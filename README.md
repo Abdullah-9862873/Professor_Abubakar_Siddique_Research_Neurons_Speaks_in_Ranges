@@ -1,23 +1,11 @@
-# Compositional Facts + NeuronLens
+# Compositional Facts and NeuronLens
 
-This project investigates how Llama-3.2-3B-Instruct internally represents
-compositional (multi-hop) factual knowledge. We extend the NeuronLens framework
-(activation range attribution) to study whether the model's hidden states for a
-two-hop query — e.g., "the mother of the singer of 'Superstition' is" — occupy
-a distinct activation regime compared to the two single facts that compose it.
+How does Llama 3.2 3B handle a two hop question like "the mother of the singer of Superstition is"? The model has to pull up one fact (Stevie Wonder sang Superstition), then another fact (his mother is X), and combine them on its own. No passage in the prompt, just what it already knows.
 
-## Approach
+We're extending the NeuronLens activation range method to see if the models hidden states for these composed queries look different from the single facts that feed into them. Per neuron activation ranges at every layer, both attention and MLP outputs, measured separately instead of just looking at the merged residual stream.
 
-- Extract per-neuron activation ranges (μ ± τσ, τ=2.5) for MLP and attention
-  outputs across all 28 layers, for single facts and composed queries
-- Measure overlap between single-fact ranges and composed-query ranges per
-  layer and component (attention vs. MLP)
-- Validate causally: zero out the identified activation range and check that
-  composed-answer accuracy drops while single-fact accuracy is preserved
-- Control for length confounds and shortcut behavior via decoy-bridge swaps
-- Dataset is generated from Wikidata bridge-entity pairs (song→performer→mother,
-  book→author→birthplace), filtered for entity notability
+The dataset comes from Wikidata bridge entity pairs. Song to performer to mother. Book to author to birthplace. Filtered for well known entities so the 3B model actually knows who we're talking about.
 
-## Status
+We check overlap between single fact ranges and composed query ranges. Then validate causally zero out the range and see if composed accuracy drops while single fact accuracy stays put. Also running a length confound control and a decoy bridge swap test to catch shortcut behavior.
 
-Pipeline complete — results are being finalized.
+Pipeline is done, results are coming together now.
