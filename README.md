@@ -141,6 +141,47 @@ This is the actual headline finding. The three person-based chains land at *exac
 
 Everything that worked in the diagnostic round got folded into `compositional_neuronlens_standalone.ipynb`: the four chains with their consistency and type constraints, entity URIs, per-chain reporting on both the knowledge filter and the CoT comparison, and a correctly-placed spot check (fixing the stale-execution bug). The overlap analysis, causal masking, shortcut check, and confound check all carry over automatically onto the larger, better-characterized dataset, they weren't rebuilt, just fed better data.
 
+## Round 6: the full pipeline, run on the merged 4-chain dataset
+
+This is the run the earlier "pending" note was waiting on: the merged notebook, all 4 chains, full 28-layer × 2-component extraction, causal masking, shortcut check, confound check, and the CoT comparison, executed end to end with no errors.
+
+**Dataset**: 1102 raw examples (300 performer_mother, 300 author_birthplace, 300 director_country, 200 capital_language, 2 hand-written). Knowledge filter brought that down to **235 known examples**: 105 capital_language, 100 performer_mother, 30 director_country, **0 author_birthplace**.
+
+**Gaussianity** (skew / kurtosis, sampled across early/mid/late layers, both components): skew stayed close to 0 everywhere, consistent with the paper. Kurtosis ran a bit lower than the paper's reported 3.2–4.0 range (2.25 to 3.14 across the checked points), thinner-tailed than their numbers but not wildly off.
+
+**Overlap**: same pattern as every prior run, high everywhere, 0.92 to 0.99 across all 56 layer/component combinations. The lowest point (attn layer 11, 0.936) was used as the causal masking target.
+
+![Overlap sweep, full run](assets/final_run_1.png)
+![Known-only vs full-dataset overlap](assets/final_run_2.png)
+
+**Causal masking**: baseline composed accuracy 81/235 (34.5%, 95% CI [0.287, 0.408]), masked 84/235 (35.7%, 95% CI [0.299, 0.421]). Overlapping CIs, no real effect, consistent with every earlier masking result. Fact_a accuracy stayed at 100% baseline, 94.5% masked.
+
+**Shortcut check**: real match rate 0.0, decoy match rate 0.0, on a 30-example slice.
+
+**CoT vs latent, pooled**: latent 81/235 (34.5%), CoT 182/235 (77.4%, 95% CI [0.717, 0.823]). Still a real, large jump.
+
+**Per-chain breakdown** (this specific cell used a different generation length than the baseline cell above, see the problem below):
+
+| chain | n | latent | CoT |
+|---|---|---|---|
+| performer_mother | 100 | 0% | 79.0% |
+| director_country | 30 | 0% | 50.0% |
+| capital_language | 105 | 13.3% | 83.8% |
+
+**Length confound**: overlap(fact_a, composed) = 0.917, overlap(fact_a, length-matched control) = 0.891. Close together, same as every earlier run, still consistent with a length effect contributing to the overlap pattern.
+
+### Two real problems this run surfaced, not ready to write up yet because of these
+
+**1. Generation-length inconsistency changes the headline number by a lot.** The baseline composed-accuracy cell calls `generate_continuation()` at its default of 16 tokens. The per-chain breakdown cell explicitly overrides this to 8 tokens. Same prompts, same model, different token budget, different answer. Backing out the math: since performer_mother and director_country show 0% at 8 tokens, essentially all 81 of the pooled baseline's successes have to be coming from capital_language, which means capital_language's real latent accuracy is somewhere between 13.3% (at 8 tokens) and roughly 77% (at 16 tokens, backing out 81/105), depending purely on how many tokens the check is allowed to look at. That is not a small discrepancy, it changes the finding from "capital_language shows modest latent composability" to "capital_language shows strong latent composability" depending on an arbitrary setting. This needs to be standardized (one token budget, used everywhere) and rerun before any specific percentage goes in front of Siddique.
+
+**2. `author_birthplace` returned zero known examples.** Not because the model doesn't know any author birthplaces, the sanity-check cell's own output shows why: one of the very first generated prompts referenced "a performer with the ID 'Q112554'", a raw Wikidata QID leaking into a prompt instead of a real title. Wikidata's label service falls back to the raw ID when an item lacks an English label, which happens disproportionately often for book entries (many editions and translations have no English `rdfs:label`). If most of the 300 `author_birthplace` rows have this problem, the knowledge filter correctly rejects all of them, not because they're obscure facts, but because the prompts themselves are nonsense. Fix: add an explicit language filter on the label (or reject any "label" that matches a raw QID pattern) before the row makes it into a template.
+
+**Verdict on "are we ready for a research summary": not yet.** The overlap-is-high finding and the fact that masking has no causal effect are both stable across six rounds now and can be trusted. The latent-vs-CoT gap for person-based relations is real and consistent across sample sizes, but the exact percentage for `capital_language` cannot be trusted until the token-budget bug is fixed, and `author_birthplace` needs its label bug fixed before it can contribute anything at all. Both are fixable without touching the overall method, this is a "standardize one hyperparameter and add one query constraint" problem, not a redesign.
+
+
+
+Everything that worked in the diagnostic round got folded into `compositional_neuronlens_standalone.ipynb`: the four chains with their consistency and type constraints, entity URIs, per-chain reporting on both the knowledge filter and the CoT comparison, and a correctly-placed spot check (fixing the stale-execution bug). The overlap analysis, causal masking, shortcut check, and confound check all carry over automatically onto the larger, better-characterized dataset, they weren't rebuilt, just fed better data.
+
 As of this writing, the merged notebook hasn't been executed end to end yet, the 195-example, 4-chain version of the full activation-extraction and plotting pipeline is still pending a run. The results section in the notebook is a template for exactly that reason.
 
 ---
@@ -158,16 +199,30 @@ As of this writing, the merged notebook hasn't been executed end to end yet, the
 ## What's actually solid right now, and what isn't yet
 
 **Solid:**
-- The overlap-is-high, not-disjoint finding. Confirmed across every run, every dataset version, every metric fix. The original email's "zero overlap" claim does not hold.
-- The latent-vs-CoT gap for person-based relations. 0% latent accuracy across three independent chains (n=77, 23, 14), each jumping substantially with explicit reasoning.
-- The relation-type dependence. Geography composes better than person-facts, latently, matching the literature.
+- The overlap-is-high, not-disjoint finding. Confirmed across all six rounds, every dataset version, every metric fix, every sample size from 39 to 235. The original email's "zero overlap" claim does not hold, at all.
+- Causal masking has no effect. Baseline and masked accuracy sit within each other's confidence intervals every time this has been tested, most recently at n=235. Whatever the overlap pattern means, it isn't causally load-bearing for composition at the layer/component tested.
+- The latent-vs-CoT gap exists and is large. Every run so far shows CoT accuracy substantially higher than latent accuracy, and the person-based chains (performer_mother, director_country) have shown exactly 0% latent accuracy across every run that included them.
+- Relation type matters. capital_language behaves differently from the person-based chains in every run, that qualitative pattern hasn't changed, only the exact percentage is in question.
 
-**Not yet solid:**
-- The 195-example, 4-chain dataset hasn't had the full range/causal/shortcut/confound pipeline run on it yet, only the lighter diagnostic version.
-- `author_birthplace` and `director_country` are individually too thin to lean on hard.
+**Not yet solid, two concrete fixes needed before write-up:**
+- **The generation-length inconsistency** (8 vs 16 tokens across different cells) makes the exact capital_language latent accuracy unreliable, anywhere from ~13% to ~77% depending purely on that setting. Fix: pick one token budget, use it in every cell that checks an answer, rerun the accuracy numbers.
+- **`author_birthplace` has zero usable examples**, from a Wikidata label bug (raw QIDs leaking into prompts for book titles lacking English labels), not from the model failing to know anything. Fix: add a language/QID-pattern filter to that chain's query, rerun it.
+
+**Also worth keeping in mind:**
+- `director_country` (n=30) is still on the thin side individually, treat it as directionally consistent with performer_mother, not independently conclusive.
 - The shortcut check is a cheap approximation of SOCRATES' actual filtering method, not a full implementation of it.
 
 ---
+
+## Repo structure
+
+```
+compositional_neuronlens_standalone.ipynb   # main pipeline: dataset, extraction, range analysis, causal validation
+diagnostic_dataset_quality.ipynb            # lighter notebook used to pressure-test the dataset before merging fixes back
+information_context.txt                     # sourced literature notes, what's verified vs not
+implementation_plan.md                      # original methodology plan
+assets/                                     # plots referenced in this README
+```
 
 ## Running it
 
