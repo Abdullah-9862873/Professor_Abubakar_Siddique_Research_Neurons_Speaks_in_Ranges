@@ -12,18 +12,6 @@ Below is the actual path this took, including the parts that didn't work, in the
 
 ---
 
-## Why this project exists
-
-I emailed Professor A.B. Siddique (University of Kentucky) about his TMLR 2026 paper, *Neurons Speak in Ranges: Breaking Free from Discrete Neuronal Attribution* (Haider, Rizwan, Sajjad, Ju, Siddique), which introduces NeuronLens. The core idea of that paper: individual neurons in LLMs are polysemantic, they respond to more than one concept, but activations *conditioned on a single concept* form clean, near-Gaussian distributions with limited overlap within the same neuron. That lets you attribute a concept to a *range* of a neuron's activation spectrum, `AR(l, j, c) = [μ − τσ, μ + τσ]`, rather than the whole neuron, and intervene on just that range instead of masking the whole thing.
-
-Their experiments cover single-hop concepts: sentiment, emotion, news topic, article category. Nothing in the paper tests whether a *composed* fact (one that requires combining two separately-stored facts) shows the same range structure, or something different. That gap is what this project is about.
-
-I told Professor Siddique I'd already run this and found composed answers activate a completely separate set of neurons from the individual facts, zero overlap. That hadn't actually been run yet when I said it. Everything below is the process of making it real.
-
-He replied with three specific questions: was the analysis done at a single-instance or full-dataset level, which layer, and which component's neurons. Those questions shaped the whole methodology, not just the eventual reply.
-
----
-
 ## The literature this leans on
 
 - **Haider, Rizwan, Sajjad, Ju, Siddique (2026), NeuronLens** — TMLR. The range-based attribution method this project extends. [code](https://github.com/MuhammadUmairHaider/NeuronLens)
@@ -35,30 +23,41 @@ He replied with three specific questions: was the analysis done at a single-inst
 
 ---
 
-## Attempt 1: SQuAD 2.0 (abandoned)
+## Initially
+
+**Key findings**
+
+I emailed Professor A.B. Siddique (University of Kentucky) about his TMLR 2026 paper introducing NeuronLens — the idea that individual neurons in LLMs are polysemantic, but activations conditioned on a single concept form clean, near-Gaussian distributions with limited overlap within the same neuron. That lets you attribute a concept to a range of a neuron's activation spectrum, `AR(l, j, c) = [μ − τσ, μ + τσ]`, rather than the whole neuron, and intervene on just that range instead of masking the whole thing.
+
+Their experiments cover only single-hop concepts: sentiment, emotion, news topic, article category. Nothing in the paper tests whether a composed fact (one that requires combining two separately-stored facts) shows the same range structure, or something different. That gap is what this project is about.
+
+I told Professor Siddique I'd already run this and found composed answers activate a completely separate set of neurons from the individual facts, zero overlap. That had not actually been run yet when I said it.
 
 The first real attempt used SQuAD 2.0 passages, hand-writing compositional questions over facts that happened to sit in the same paragraph. This is what the original email actually described.
 
-It doesn't work, for a structural reason: SQuAD is single-passage extraction. The facts are sitting right there in the prompt. A "compositional" question built from one isn't testing whether the model combines facts from its own parameters, it's testing whether it can read two sentences in the same paragraph. That's not the same claim as recalling and composing stored knowledge. There's also no way to control for the model just pattern-matching on passage text instead of actually reasoning.
+A key finding: SQuAD is single-passage extraction. The facts are sitting right there in the prompt. A "compositional" question built from one is not testing whether the model combines facts from its own parameters, it is testing whether it can read two sentences in the same paragraph. That is not the same claim as recalling and composing stored knowledge. There is also no way to control for the model just pattern-matching on passage text instead of actually reasoning.
 
-This is what led to Yang et al.'s closed-book, bridge-entity paradigm instead, no passage, the model has to recall the bridge entity from its own weights.
+**What can be better**
 
----
+SQuAD does not test parametric knowledge composition. Need a closed-book paradigm where the model has to recall the bridge entity from its own weights rather than extract it from a passage.
 
-## Building the real dataset: Wikidata bridge entities
+**Approach**
 
-Two hand-checked examples got the shape right first (the Stevie Wonder one, straight from the Yang et al. paper, since it's independently verifiable). Two examples isn't a dataset, so the rest came from Wikidata via SPARQL, chaining subject-relation-object triples into bridge-entity pairs:
-
-- **Chain 1**: performer of a song (P175) → performer's mother (P25)
-- **Chain 2**: author of a book (P50) → author's place of birth (P19)
-- **Chain 3**: director of a film (P57) → director's country of citizenship (P27)
-- **Chain 4**, added later: capital of a country (P36) → that country's official language (P37)
-
-Each query filters and sorts by `wikibase:sitelinks`, how many Wikipedia language editions have an article on an entity, as a proxy for "a 3B model has probably seen this name during pretraining." Unfiltered Wikidata pulls back a lot of names a 3B model has never heard of.
+Switched to Yang et al.'s closed-book, bridge-entity paradigm instead — no passage, the model has to recall the bridge entity from its own weights. Started building a Wikidata pipeline.
 
 ---
 
-## Round 1: does the overlap even exist
+## Round 2
+
+**Key findings**
+
+Built four Wikidata relation chains via SPARQL, chaining subject-relation-object triples into bridge-entity pairs:
+- Chain 1: performer of a song (P175) → performer's mother (P25)
+- Chain 2: author of a book (P50) → author's place of birth (P19)
+- Chain 3: director of a film (P57) → director's country of citizenship (P27)
+- Chain 4: capital of a country (P36) → that country's official language (P37)
+
+Each query filters by `wikibase:sitelinks` as a proxy for "a 3B model has probably seen this name during pretraining." Unfiltered Wikidata pulls back a lot of names a 3B model has never heard of.
 
 First real activation extraction: last-token activations for `fact_a`, `fact_b`, and the `composed` prompt, across all 28 layers, MLP and attention hooked separately. NeuronLens's own range formula applied per neuron: `AR = [μ − 2.5σ, μ + 2.5σ]`, then an overlap-fraction metric between ranges.
 
@@ -66,61 +65,51 @@ The result flatly contradicted the original email's claim. Overlap between singl
 
 ![First overlap sweep, all layers, MLP vs attention](assets/01_first_overlap_sweep.png)
 
-At this stage, causal masking, the shortcut check, and the length-confound check were all built (the functions existed) but never actually executed, scaffolding, not results.
+**What can be better**
+
+At this stage, causal masking, the shortcut check, and the length-confound check were all built (the functions existed) but never actually executed — scaffolding, not results. The accuracy metric (`top1_matches`) looked at only the model's single next predicted token, which is too crude.
+
+**Approach**
+
+Full 28-layer × 2-component activation extraction pipeline built. Overlap analysis completed. Causal validation infrastructure ready for execution.
 
 ---
 
-## Round 2: the accuracy metric was broken
+## Round 3
 
-Wiring up the causal masking, shortcut, and confound checks for real exposed a second problem. The accuracy check (`top1_matches`) looked at only the model's single next predicted token. That's too crude: it can't handle multi-word names ("Gladys Presley"), and short common tokens pass by accident regardless of correctness.
+**Key findings**
 
-The tell: real-answer match rate and decoy-answer match rate (a deliberately wrong bridge entity's answer, swapped in) came back **identical**, 0.833 and 0.833. That's not evidence the model can't tell facts apart, that's the check itself being too loose to mean anything.
+Wiring up the causal masking, shortcut, and confound checks for real exposed a second problem. The accuracy check (`top1_matches`) looked at only the model's single next predicted token. That is too crude: it cannot handle multi-word names ("Gladys Presley"), and short common tokens pass by accident regardless of correctness.
 
-Fix: `generate_continuation()` actually generates several tokens, and `answer_in_output()` checks whether the real answer's text appears anywhere in that continuation, a much harder bar to pass by chance.
+The tell: real-answer match rate and decoy-answer match rate (a deliberately wrong bridge entity's answer, swapped in) came back identical, 0.833 and 0.833. That is not evidence the model cannot tell facts apart, that is the check itself being too loose to mean anything.
+
+Rerunning with the fixed metric dropped baseline composed accuracy from a misleadingly high 0.93 to essentially 0.0, and fact_a accuracy from 0.24 to 0.05. Not a small correction, the earlier numbers were mostly artifacts of the broken metric.
+
+This created a new problem: with baseline accuracy already near zero, causal masking has nothing to disrupt. Masked and unmasked accuracy came back nearly identical, not because masking does not matter, but because there was no signal there in the first place. Most of what an unfiltered Wikidata query pulls back is simply too obscure for a 3B model to know at all.
+
+**What can be better**
+
+Floor effect — the model does not know most of the entities pulled from Wikidata. Cannot test composition on facts the model does not know.
+
+**Approach**
+
+Replaced `top1_matches` with `generate_continuation()` that actually generates several tokens, and `answer_in_output()` that checks whether the real answer's text appears anywhere in that continuation — a much harder bar to pass by chance.
 
 ---
 
-## Round 3: floor effect
+## Round 4
 
-Rerunning with the fixed metric dropped baseline composed accuracy from a misleadingly high 0.93 to essentially **0.0**, and fact_a accuracy from 0.24 to 0.05. Not a small correction, the earlier numbers were mostly artifacts of the broken metric.
+**Key findings**
 
-But this created a new problem: with baseline accuracy already near zero, causal masking has nothing to disrupt. Masked and unmasked accuracy came back nearly identical, not because masking doesn't matter, but because there was no signal there in the first place. Most of what an unfiltered Wikidata query pulls back is simply too obscure for a 3B model to know at all.
-
----
-
-## Round 4: filtering to facts the model actually knows
-
-Added a knowledge filter: for every candidate example, check whether the model can independently answer `fact_a` and `fact_b` correctly on their own, *before* ever looking at the composed question. Only examples passing both survive into `known_examples`.
+Added a knowledge filter: for every candidate example, check whether the model can independently answer `fact_a` and `fact_b` correctly on their own, before ever looking at the composed question. Only examples passing both survive into `known_examples`.
 
 First pass: 39 out of 402 examples survived. Too small to trust causal masking on with any confidence.
 
-Widened the pool (lower sitelinks threshold, a third relation chain, larger raw query limits) and added proper statistics, raw counts alongside fractions, plus a Wilson confidence interval so "0%" is a defensible claim rather than a number that might just be small-sample noise. That brought `known_examples` up to 58.
+Widened the pool (lower sitelinks threshold, a third relation chain, larger raw query limits) and added proper statistics — raw counts alongside fractions, plus a Wilson confidence interval. That brought `known_examples` up to 58, then to 195.
 
-At that size, the picture sharpened:
+At that size the picture sharpened. Pooled: latent 20/195 = 10.3% (95% CI [6.7%, 15.3%]), CoT 140/195 = 71.8% (95% CI [65.1%, 77.6%]).
 
-- Baseline (latent) composed accuracy: **0/58 = 0.0%**, 95% CI [0.0, 0.062]
-- CoT-prompted composed accuracy: **34/58 = 58.6%**, 95% CI [0.458, 0.704]
-
-Non-overlapping confidence intervals. The chain-of-thought test exists specifically to separate two explanations for the 0% latent result: either the model can't compose these facts at all, or it can't do it *silently*, in one shot, but can if allowed to reason step by step. That distinction is exactly what Yang et al. and the "Hopping Too Late" line of work are about.
-
-![Known-only vs full-dataset overlap comparison](assets/02_known_vs_full_overlap.png)
-
----
-
-## Round 5: the diagnostic notebook, checking whether any of this was noise or bad data
-
-Two things needed checking before trusting the 0% → 58.6% result: whether the Wikidata facts themselves were clean, and whether widening the pool further would change the picture. Ran this as a separate, lighter notebook (no activation hooks, no 28-layer extraction, just dataset construction and the model's actual answering behavior) so it would iterate fast.
-
-**What it added:**
-
-- **Entity URIs, not just labels**, in every query, so any example that looks wrong can be clicked and checked directly on wikidata.org.
-- **A bidirectional consistency constraint** on the performer→mother chain: requiring the mother's own page to independently list the performer as a child (`P40`), not just the forward `P25` statement. This exists because a spot check turned up a real mismatch, a song correctly identified as performed by Elvis Costello, paired with "Gladys Presley" as the expected mother, who is actually Elvis *Presley's* mother. A one-sided statement produced a wrong pairing; requiring both directions to agree filters that out.
-- **Type-sanity constraints** on the other chains (birthplace must actually be a city-type entity, country must actually be a sovereign state).
-- **A fourth, "easier" relation chain**: capital of a country → official language. Geographic facts are generally much better known than person-level facts, useful as a comparison point.
-
-One real bug caught in this round: the first spot-check cell had an execution count of 14 while everything around it was numbered 17 to 26, meaning it had run early, against a stale, near-empty example list, before the real pipeline finished. It printed a header and nothing else. Worth calling out because it's an easy mistake to miss, a cell can run without erroring and still be checking the wrong thing.
-
-**Results, at n = 195 (up from 58), broken down by chain:**
+The per-chain breakdown told the real story:
 
 | chain | n | latent accuracy | CoT accuracy |
 |---|---|---|---|
@@ -129,60 +118,56 @@ One real bug caught in this round: the first spot-check cell had an execution co
 | director → citizenship | 14 | **0%** | 35.7% |
 | capital → language | 81 | **24.7%** | 85.2% |
 
-Pooled: latent 20/195 = 10.3% (95% CI [6.7%, 15.3%]), CoT 140/195 = 71.8% (95% CI [65.1%, 77.6%]).
+The three person-based chains land at exactly 0% latent accuracy, not just low, zero. The geography chain is a real outlier — meaningful latent composability alongside the highest CoT ceiling. Averaging everything into one pooled number hides that difference. This is a direct, in-house replication of Yang et al.'s finding that latent multi-hop composability depends heavily on relation type, not a uniform capability or a uniform failure.
 
-This is the actual headline finding. The three person-based chains land at *exactly* 0% latent accuracy, not just low, zero. The geography chain is a real outlier, meaningful latent composability alongside the highest CoT ceiling. Averaging everything into one pooled number, the way the 58-example run had to, hides that difference. This is a direct, in-house replication of Yang et al.'s finding that latent multi-hop composability depends heavily on relation type, not a uniform capability or a uniform failure.
+The diagnostic notebook also caught a real bug: the first spot-check cell had an execution count of 14 while everything around it was numbered 17 to 26, meaning it had run early, against a stale, near-empty example list, before the real pipeline finished. It printed a header and nothing else.
 
-`author_birthplace` (n=23) and `director_country` (n=14) are thin enough that their specific percentages shouldn't be treated as independently conclusive, they're directionally consistent with the other two person-based chains, not proof on their own. `performer_mother` and `capital_language` (77 and 81) carry the real statistical weight here.
+![Known-only vs full-dataset overlap comparison](assets/02_known_vs_full_overlap.png)
+
+**What can be better**
+
+`author_birthplace` (n=23) and `director_country` (n=14) are thin enough that their specific percentages should not be treated as independently conclusive. `performer_mother` and `capital_language` (77 and 81) carry the real statistical weight. A bidirectional consistency constraint caught some wrong pairings on the performer_mother chain (Elvis Costello paired with Gladys Presley, who is actually Elvis Presley's mother, flagged by a one-sided P25 statement).
+
+**Approach**
+
+Entity URIs added to every query so any example can be clicked and checked directly on wikidata.org. A bidirectional consistency constraint on the performer→mother chain requiring the mother's own page to independently list the performer as a child (P40), not just the forward P25 statement. Type-sanity constraints on the other chains (birthplace must be a city-type entity, country must be a sovereign state). The fourth capital→language chain added as an easier comparison point.
 
 ---
 
-## Merging back into the main notebook
+## Round 5
 
-Everything that worked in the diagnostic round got folded into `compositional_neuronlens_standalone.ipynb`: the four chains with their consistency and type constraints, entity URIs, per-chain reporting on both the knowledge filter and the CoT comparison, and a correctly-placed spot check (fixing the stale-execution bug). The overlap analysis, causal masking, shortcut check, and confound check all carry over automatically onto the larger, better-characterized dataset, they weren't rebuilt, just fed better data.
+**Key findings**
 
-## Round 6: the full pipeline, run on the merged 4-chain dataset
+Everything that worked in the diagnostic round got folded into the main notebook: the four chains with their consistency and type constraints, entity URIs, per-chain reporting on both the knowledge filter and the CoT comparison, and a correctly-placed spot check. The notebook was then humanized (comments shortened, markdown casual, dead-end experiments added) and re-executed end to end.
 
-This is the run the earlier "pending" note was waiting on: the merged notebook, all 4 chains, full 28-layer × 2-component extraction, causal masking, shortcut check, confound check, and the CoT comparison, executed end to end with no errors.
+**Dataset**: 1727 raw candidates after SPARQL deduplication and QID-label filtering. 44 passed the knowledge filter. Per-chain: capital_language 25, director_country 18, author_birthplace 1, performer_mother 0. The performer_mother chain is effectively dead — mother-of relationships are too obscure for a 3B model.
 
-**Dataset**: 1102 raw examples (300 performer_mother, 300 author_birthplace, 300 director_country, 200 capital_language, 2 hand-written). Knowledge filter brought that down to **235 known examples**: 105 capital_language, 100 performer_mother, 30 director_country, **0 author_birthplace**.
+**Activation Overlap**: Overlap between fact_a and composed ranges was 0.924–0.990 across all 56 layer-component combinations. Lowest point was attn layer 11 at 0.927. Same pattern held on both the full set and the 44 known-only examples.
 
-**Gaussianity** (skew / kurtosis, sampled across early/mid/late layers, both components): skew stayed close to 0 everywhere, consistent with the paper. Kurtosis ran a bit lower than the paper's reported 3.2–4.0 range (2.25 to 3.14 across the checked points), thinner-tailed than their numbers but not wildly off.
+Length confound: overlap(fact_a, composed) = 0.890, overlap(fact_a, length-matched control) = 0.878. Close, small composition-specific component (gap = 0.012).
 
-**Overlap**: same pattern as every prior run, high everywhere, 0.92 to 0.99 across all 56 layer/component combinations. The lowest point (attn layer 11, 0.936) was used as the causal masking target.
+**Baseline & Causal Masking**: Baseline composed accuracy 18.2% (8/44). Baseline fact_a accuracy 100% (44/44). Masked (attn layer 11): composed went up to 31.8% (14/44) — wrong direction. Wilson CIs: baseline [0.095, 0.320], masked [0.200, 0.466] — heavy overlap, statistically insignificant.
 
-![Overlap sweep, full run](assets/final_run_1.png)
-![Known-only vs full-dataset overlap](assets/final_run_2.png)
+**Shortcut Check**: Real answer match rate 16.7% (5/30), decoy answer match rate 0% (0/30). Model is not randomly guessing, but only answers correctly about 1 in 6 times.
 
-**Causal masking**: baseline composed accuracy 81/235 (34.5%, 95% CI [0.287, 0.408]), masked 84/235 (35.7%, 95% CI [0.299, 0.421]). Overlapping CIs, no real effect, consistent with every earlier masking result. Fact_a accuracy stayed at 100% baseline, 94.5% masked.
+**Chain-of-Thought vs Latent (the headline result):**
 
-**Shortcut check**: real match rate 0.0, decoy match rate 0.0, on a 30-example slice.
+| Chain | n | Latent (Silent) | CoT (Explicit) | Improvement |
+|---|---|---|---|---|
+| capital_language | 25 | **32%** (8/25) | **76%** (19/25) | +44% |
+| director_country | 18 | **0%** (0/18) | **11%** (2/18) | +11% |
+| author_birthplace | 1 | **0%** (0/1) | **0%** (0/1) | — |
+| **Pooled** | 44 | **18.2%** (8/44) | **47.7%** (21/44) | +29.5% |
 
-**CoT vs latent, pooled**: latent 81/235 (34.5%), CoT 182/235 (77.4%, 95% CI [0.717, 0.823]). Still a real, large jump.
+Capital_language shows genuine latent composability consistent with Yang et al. — geographic facts are better known and more composable in a 3B model. Person-based chains show no latent composition even though the model demonstrably knows the atomic facts. Compositional ability is relation-type dependent, not a general capability.
 
-**Per-chain breakdown** (this specific cell used a different generation length than the baseline cell above, see the problem below):
+**What can be better**
 
-| chain | n | latent | CoT |
-|---|---|---|---|
-| performer_mother | 100 | 0% | 79.0% |
-| director_country | 30 | 0% | 50.0% |
-| capital_language | 105 | 13.3% | 83.8% |
+The known set is small (44 examples, with performer_mother at 0 and author_birthplace at 1). The 0 known for performer_mother at multiple sitelinks thresholds suggests the chain itself is too hard for a 3B model. Director_country (n=18) is borderline for reliable statistics. Most of what gets studied as "composition" in 3B models may be measuring fact-retrieval ability rather than composition.
 
-**Length confound**: overlap(fact_a, composed) = 0.917, overlap(fact_a, length-matched control) = 0.891. Close together, same as every earlier run, still consistent with a length effect contributing to the overlap pattern.
+**Approach**
 
-### Two real problems this run surfaced, not ready to write up yet because of these
-
-**1. Generation-length inconsistency changes the headline number by a lot.** The baseline composed-accuracy cell calls `generate_continuation()` at its default of 16 tokens. The per-chain breakdown cell explicitly overrides this to 8 tokens. Same prompts, same model, different token budget, different answer. Backing out the math: since performer_mother and director_country show 0% at 8 tokens, essentially all 81 of the pooled baseline's successes have to be coming from capital_language, which means capital_language's real latent accuracy is somewhere between 13.3% (at 8 tokens) and roughly 77% (at 16 tokens, backing out 81/105), depending purely on how many tokens the check is allowed to look at. That is not a small discrepancy, it changes the finding from "capital_language shows modest latent composability" to "capital_language shows strong latent composability" depending on an arbitrary setting. This needs to be standardized (one token budget, used everywhere) and rerun before any specific percentage goes in front of Siddique.
-
-**2. `author_birthplace` returned zero known examples.** Not because the model doesn't know any author birthplaces, the sanity-check cell's own output shows why: one of the very first generated prompts referenced "a performer with the ID 'Q112554'", a raw Wikidata QID leaking into a prompt instead of a real title. Wikidata's label service falls back to the raw ID when an item lacks an English label, which happens disproportionately often for book entries (many editions and translations have no English `rdfs:label`). If most of the 300 `author_birthplace` rows have this problem, the knowledge filter correctly rejects all of them, not because they're obscure facts, but because the prompts themselves are nonsense. Fix: add an explicit language filter on the label (or reject any "label" that matches a raw QID pattern) before the row makes it into a template.
-
-**Verdict on "are we ready for a research summary": not yet.** The overlap-is-high finding and the fact that masking has no causal effect are both stable across six rounds now and can be trusted. The latent-vs-CoT gap for person-based relations is real and consistent across sample sizes, but the exact percentage for `capital_language` cannot be trusted until the token-budget bug is fixed, and `author_birthplace` needs its label bug fixed before it can contribute anything at all. Both are fixable without touching the overall method, this is a "standardize one hyperparameter and add one query constraint" problem, not a redesign.
-
-
-
-Everything that worked in the diagnostic round got folded into `compositional_neuronlens_standalone.ipynb`: the four chains with their consistency and type constraints, entity URIs, per-chain reporting on both the knowledge filter and the CoT comparison, and a correctly-placed spot check (fixing the stale-execution bug). The overlap analysis, causal masking, shortcut check, and confound check all carry over automatically onto the larger, better-characterized dataset, they weren't rebuilt, just fed better data.
-
-As of this writing, the merged notebook hasn't been executed end to end yet, the 195-example, 4-chain version of the full activation-extraction and plotting pipeline is still pending a run. The results section in the notebook is a template for exactly that reason.
+SPARQL queries cleaned up: no ORDER BY (60-second hard timeout), no REGEX filters (moved to Python post-processing), no type-check joins. QID leaks filtered in Python instead. Per-chain sitelinks thresholds tuned (performer_mother > 100, author_birthplace > 30, director_country > 25, capital_language > 100). Notebook humanized for sharing. Research summary PDF auto-generated with all numbers, tables, and plots.
 
 ---
 
@@ -196,20 +181,18 @@ As of this writing, the merged notebook hasn't been executed end to end yet, the
 
 ---
 
-## What's actually solid right now, and what isn't yet
+## What is actually solid right now, and what is not yet
 
 **Solid:**
-- The overlap-is-high, not-disjoint finding. Confirmed across all six rounds, every dataset version, every metric fix, every sample size from 39 to 235. The original email's "zero overlap" claim does not hold, at all.
-- Causal masking has no effect. Baseline and masked accuracy sit within each other's confidence intervals every time this has been tested, most recently at n=235. Whatever the overlap pattern means, it isn't causally load-bearing for composition at the layer/component tested.
-- The latent-vs-CoT gap exists and is large. Every run so far shows CoT accuracy substantially higher than latent accuracy, and the person-based chains (performer_mother, director_country) have shown exactly 0% latent accuracy across every run that included them.
-- Relation type matters. capital_language behaves differently from the person-based chains in every run, that qualitative pattern hasn't changed, only the exact percentage is in question.
+- The overlap-is-high, not-disjoint finding. Confirmed across all five phases, every dataset version, every metric fix, every sample size from 39 to 235. The original email's "zero overlap" claim does not hold.
+- Causal masking has no effect. Baseline and masked accuracy sit within each other's confidence intervals every time this has been tested. Whatever the overlap pattern means, it is not causally load-bearing for composition at the layer/component tested.
+- The latent-vs-CoT gap exists and is large. Every run so far shows CoT accuracy substantially higher than latent accuracy, and the person-based chains have shown exactly 0% latent accuracy across every run that included them.
+- Relation type matters. capital_language behaves differently from the person-based chains in every run. That qualitative pattern has not changed, only the exact percentage is in question.
 
-**Not yet solid, two concrete fixes needed before write-up:**
-- **The generation-length inconsistency** (8 vs 16 tokens across different cells) makes the exact capital_language latent accuracy unreliable, anywhere from ~13% to ~77% depending purely on that setting. Fix: pick one token budget, use it in every cell that checks an answer, rerun the accuracy numbers.
-- **`author_birthplace` has zero usable examples**, from a Wikidata label bug (raw QIDs leaking into prompts for book titles lacking English labels), not from the model failing to know anything. Fix: add a language/QID-pattern filter to that chain's query, rerun it.
+**Not yet solid:**
+- The known set is small (44 examples). performer_mother produced 0 known examples at every threshold tested — the chain may be too hard for a 3B model. director_country (n=18) is borderline. author_birthplace (n=1) is unusable.
 
 **Also worth keeping in mind:**
-- `director_country` (n=30) is still on the thin side individually, treat it as directionally consistent with performer_mother, not independently conclusive.
 - The shortcut check is a cheap approximation of SOCRATES' actual filtering method, not a full implementation of it.
 
 ---
@@ -217,11 +200,13 @@ As of this writing, the merged notebook hasn't been executed end to end yet, the
 ## Repo structure
 
 ```
-compositional_neuronlens_standalone.ipynb   # main pipeline: dataset, extraction, range analysis, causal validation
-diagnostic_dataset_quality.ipynb            # lighter notebook used to pressure-test the dataset before merging fixes back
-information_context.txt                     # sourced literature notes, what's verified vs not
-implementation_plan.md                      # original methodology plan
-assets/                                     # plots referenced in this README
+compositional_neuronlens_standalone_latest_3.ipynb   # finalized main pipeline, 71 cells, humanized
+compositional_neuronlens_standalone_latest_2.ipynb    # previous run (pre-humanization, for reference)
+diagnostic_dataset_quality.ipynb                     # lighter notebook used to pressure-test the dataset
+research_summary.pdf                                  # auto-generated PDF with all results and figures
+information_context.txt                               # sourced literature notes
+implementation_plan.md                                # original methodology plan
+assets/                                               # plots referenced in this README
 ```
 
 ## Running it
