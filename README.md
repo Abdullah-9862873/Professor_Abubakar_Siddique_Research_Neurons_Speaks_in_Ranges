@@ -208,7 +208,7 @@ information_context.txt                               # sourced literature notes
 implementation_plan.md                                # original methodology plan
 assets/                                               # plots referenced in this README
 ```
-
+ 
 ## Running it
 
 Needs a GPU (a free Colab T4 is enough) and a Hugging Face account with access requested and approved for `meta-llama/Llama-3.2-3B-Instruct`. Everything else installs from the first cell. Run top to bottom; the knowledge-filtering and generation steps are the slow part.
